@@ -6,6 +6,7 @@ import batchActions from "util/batchActions";
 import lbry from "lbry";
 import fs from "fs";
 import http from "http";
+import fetch from "isomorphic-fetch";
 
 const { remote } = require("electron");
 const { extname } = require("path");
@@ -133,30 +134,22 @@ export function doDownloadLanguages() {
       fs.mkdirSync(app.i18n.directory);
     }
 
-    const xhr = new XMLHttpRequest();
-    xhr.onreadystatechange = () => {
-      if (xhr.readyState === XMLHttpRequest.DONE) {
-        if (xhr.status === 200) {
-          try {
-            const files = JSON.parse(xhr.responseText);
-            const actions = [];
-            files.forEach(file => {
-              actions.push(doDownloadLanguage(file));
-            });
+    fetch("http://i18n.lbry.io")
+      .then(response => response.json())
+      .then(response => {
+        const actions = [];
 
-            dispatch(batchActions(...actions));
-          } catch (err) {
-            throw err;
-          }
-        } else {
-          throw new Error(
-            __("The list of available languages could not be retrieved.")
-          );
-        }
-      }
-    };
-    xhr.open("get", "http://i18n.lbry.io");
-    xhr.send();
+        response.forEach(file => {
+          actions.push(doDownloadLanguage(file));
+        });
+
+        dispatch(batchActions(...actions));
+      })
+      .catch(error => {
+        throw new Error(
+          __("The list of available languages could not be retrieved.")
+        );
+      });
   };
 }
 
