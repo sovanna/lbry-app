@@ -1,4 +1,5 @@
 import lbry from "./lbry.js";
+import fetch from "isomorphic-fetch";
 
 const querystring = require("querystring");
 const { ipcRenderer } = require("electron");
@@ -15,6 +16,44 @@ const CONNECTION_STRING = process.env.LBRY_APP_API_URL
   : "https://api.lbry.io/";
 
 const EXCHANGE_RATE_TIMEOUT = 20 * 60 * 1000;
+
+const parseJSON = response => {
+  return response.json();
+};
+
+const requestLbryio = (url, opts) => {
+  return new Promise((resolve, reject) => {
+    fetch(url, opts)
+      .then(parseJSON)
+      .then(response => {
+        if (response.success) {
+          return resolve(response.data);
+        }
+
+        if (reject) {
+          return reject(new Error(response.error));
+        }
+
+        // dispatchEvent is still here despite I think
+        // these code won't be called assuming reject is used.
+        document.dispatchEvent(
+          new CustomEvent("unhandledError", {
+            detail: {
+              url: url,
+              opts: opts,
+              message: response.error.message,
+              ...(response.error.data ? { data: response.error.data } : {}),
+            },
+          })
+        );
+      })
+      .catch(err => {
+        reject(
+          new Error(__("Something went wrong making an internal API call."))
+        );
+      });
+  });
+};
 
 lbryio.getExchangeRates = function() {
   if (
@@ -43,71 +82,41 @@ lbryio.call = function(resource, action, params = {}, method = "get") {
       return;
     }
 
-    const xhr = new XMLHttpRequest();
-
-    xhr.addEventListener("error", function(event) {
-      reject(
-        new Error(__("Something went wrong making an internal API call."))
-      );
-    });
-
-    xhr.addEventListener("timeout", function() {
-      reject(new Error(__("XMLHttpRequest connection timed out")));
-    });
-
-    xhr.addEventListener("load", function() {
-      const response = JSON.parse(xhr.responseText);
-
-      if (!response.success) {
-        if (reject) {
-          const error = new Error(response.error);
-          error.xhr = xhr;
-          reject(error);
-        } else {
-          document.dispatchEvent(
-            new CustomEvent("unhandledError", {
-              detail: {
-                connectionString: connectionString,
-                method: action,
-                params: params,
-                message: response.error.message,
-                ...(response.error.data ? { data: response.error.data } : {}),
-              },
-            })
-          );
-        }
-      } else {
-        resolve(response.data);
-      }
-    });
-
     lbryio
       .getAuthToken()
       .then(token => {
         const fullParams = { auth_token: token, ...params };
 
+        let baseURL = `${CONNECTION_STRING}${resource}/${action}`;
+
         if (method == "get") {
-          xhr.open(
-            "get",
-            CONNECTION_STRING +
-              resource +
-              "/" +
-              action +
-              "?" +
-              querystring.stringify(fullParams),
-            true
+          return requestLbryio(
+            `${baseURL}?${querystring.stringify(fullParams)}`,
+            {
+              method: "GET",
+              headers: {
+                Accept: "application/json",
+                "Content-Type": "application/json",
+              },
+            }
           );
-          xhr.send();
-        } else if (method == "post") {
-          xhr.open("post", CONNECTION_STRING + resource + "/" + action, true);
-          xhr.setRequestHeader(
-            "Content-type",
-            "application/x-www-form-urlencoded"
-          );
-          xhr.send(querystring.stringify(fullParams));
-        } else {
-          reject(new Error(__("Invalid method")));
         }
+
+        if (method == "post") {
+          return requestLbryio(baseURL, {
+            method: "POST",
+            headers: {
+              Accept: "application/json",
+              "Content-Type": "application/x-www-form-urlencoded",
+            },
+            body: querystring.stringify(fullParams),
+          });
+        }
+
+        reject(new Error(__("Invalid method")));
+      })
+      .then(data => {
+        resolve(data);
       })
       .catch(reject);
   });
